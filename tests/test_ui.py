@@ -160,7 +160,7 @@ def test_smart_sort_counts_only_open_and_relevant_copy(tmp_path, monkeypatch):
     window.items.setCurrentRow(0)
     assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] == 0
     window.copy_value("password")
-    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] == 0
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] > 0
     monkeypatch.setattr("quickbox.ui.QDesktopServices.openUrl", lambda url: True)
     window.open_item(window.items.item(0))
     assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] > 0

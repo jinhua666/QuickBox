@@ -726,7 +726,7 @@ class MainWindow(QMainWindow):
             return
         clipboard = QApplication.clipboard()
         clipboard.setText(value)
-        if (self.current.kind == "website" and field == "url") or (self.current.kind == "command" and field == "content"):
+        if (self.current.kind == "website" and field in {"url", "password"}) or (self.current.kind == "command" and field == "content"):
             self.store.record_usage(self.current.id)
             self.refresh_timer.start(0)
         self.copy_generation += 1
