@@ -15,6 +15,8 @@ OutputBaseFilename=QuickBox-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\quickbox.ico
+UninstallDisplayIcon={app}\QuickBox.exe
 CloseApplications=yes
 
 [Tasks]

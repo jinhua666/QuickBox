@@ -1,12 +1,17 @@
 import sys
+import ctypes
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from .storage import Storage, default_path
-from .ui import MainWindow, UnlockDialog, STYLE
+from .ui import MainWindow, UnlockDialog, STYLE, asset_path
 
 
 def main():
+    if sys.platform == "win32":
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("QuickBox.PersonalHub.Desktop")
     app = QApplication(sys.argv)
     app.setApplicationName("QuickBox")
+    app.setWindowIcon(QIcon(str(asset_path("quickbox.ico"))))
     app.setStyleSheet(STYLE)
     try:
         store = Storage(default_path())

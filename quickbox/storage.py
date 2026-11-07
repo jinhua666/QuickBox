@@ -9,8 +9,8 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-SCHEMA_VERSION = 1
-KINDS = {"website", "account", "command", "document"}
+SCHEMA_VERSION = 2
+KINDS = {"website", "command"}
 
 
 class InvalidPassword(Exception):
@@ -23,6 +23,7 @@ class Item:
     name: str
     url: str = ""
     username: str = ""
+    login_method: str = ""
     password: str = ""
     content: str = ""
     notes: str = ""
@@ -72,13 +73,22 @@ class Storage:
                 self.db.execute("""CREATE TABLE items (
                     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
                     url TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '',
-                    password BLOB, content TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+                    password BLOB, content TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', login_method TEXT NOT NULL DEFAULT '',
                     favorite INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL)""")
                 self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         elif version < SCHEMA_VERSION:
-            self._backup_before_migration()
-            self.db.close()
-            raise RuntimeError("此数据库版本尚无可用的迁移程序，已创建备份")
+            try:
+                self._backup_before_migration()
+                if version != 1:
+                    raise RuntimeError("此数据库版本尚无可用的迁移程序")
+                with self.db:
+                    self.db.execute("BEGIN IMMEDIATE")
+                    self.db.execute("ALTER TABLE items ADD COLUMN login_method TEXT NOT NULL DEFAULT ''")
+                    self.db.execute("UPDATE items SET kind='website' WHERE kind IN ('account','document')")
+                    self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            except Exception:
+                self.db.close()
+                raise
 
     def _backup_before_migration(self):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -123,10 +133,6 @@ class Storage:
     def _validate(self, item):
         if item.kind not in KINDS or not item.name.strip():
             raise ValueError("请选择有效类型并填写名称")
-        if item.kind == "account" and not item.password:
-            raise ValueError("请填写密码")
-        if item.kind in {"website", "document"} and not item.url.strip():
-            raise ValueError("请填写地址")
         if item.kind == "command" and not item.content.strip():
             raise ValueError("请填写命令")
 
@@ -135,8 +141,8 @@ class Storage:
         self._validate(item)
         with self.db:
             pos = self.db.execute("SELECT COALESCE(MAX(position), -1)+1 FROM items").fetchone()[0]
-            cur = self.db.execute("INSERT INTO items(kind,name,url,username,password,content,notes,favorite,position) VALUES (?,?,?,?,?,?,?,?,?)",
-                (item.kind, item.name.strip(), item.url, item.username, _encrypt(key, item.password) if item.password else None, item.content, item.notes, int(item.favorite), pos))
+            cur = self.db.execute("INSERT INTO items(kind,name,url,username,password,content,notes,favorite,position,login_method) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (item.kind, item.name.strip(), item.url, item.username, _encrypt(key, item.password) if item.password else None, item.content, item.notes, int(item.favorite), pos, item.login_method))
         item.id, item.position = cur.lastrowid, pos
         return item
 
@@ -144,8 +150,8 @@ class Storage:
         key = self._require_key()
         self._validate(item)
         with self.db:
-            cur = self.db.execute("UPDATE items SET kind=?, name=?, url=?, username=?, password=?, content=?, notes=?, favorite=? WHERE id=?",
-                (item.kind, item.name.strip(), item.url, item.username, _encrypt(key, item.password) if item.password else None, item.content, item.notes, int(item.favorite), item.id))
+            cur = self.db.execute("UPDATE items SET kind=?, name=?, url=?, username=?, password=?, content=?, notes=?, favorite=?, login_method=? WHERE id=?",
+                (item.kind, item.name.strip(), item.url, item.username, _encrypt(key, item.password) if item.password else None, item.content, item.notes, int(item.favorite), item.login_method, item.id))
             if cur.rowcount != 1:
                 raise ValueError("条目不存在")
 
@@ -159,12 +165,12 @@ class Storage:
         rows = self.db.execute("SELECT * FROM items ORDER BY position,id").fetchall()
         result = []
         for row in rows:
-            item = Item(id=row["id"], kind=row["kind"], name=row["name"], url=row["url"], username=row["username"],
+            item = Item(id=row["id"], kind=row["kind"], name=row["name"], url=row["url"], username=row["username"], login_method=row["login_method"],
                         password=_decrypt(key, row["password"]) if row["password"] else "", content=row["content"],
                         notes=row["notes"], favorite=bool(row["favorite"]), position=row["position"])
             if kind and item.kind != kind or favorites and not item.favorite:
                 continue
-            if query.casefold() not in " ".join((item.name, item.url, item.username, item.content, item.notes)).casefold():
+            if query.casefold() not in " ".join((item.name, item.url, item.username, item.login_method, item.content, item.notes)).casefold():
                 continue
             result.append(item)
         return result
