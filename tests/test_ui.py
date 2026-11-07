@@ -16,10 +16,10 @@ def test_unlock_automatically_after_correct_password(tmp_path):
     store.key = None
     dialog = UnlockDialog(store)
     dialog.password.setText("wrong")
-    dialog.try_unlock()
+    QTest.qWait(900)
     assert dialog.result() != dialog.DialogCode.Accepted
     dialog.password.setText("correct-password")
-    dialog.try_unlock()
+    QTest.qWait(900)
     assert dialog.result() == dialog.DialogCode.Accepted
     store.close()
 
