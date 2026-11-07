@@ -12,7 +12,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("QuickBox")
     app.setWindowIcon(QIcon(str(asset_path("quickbox.ico"))))
-    app.setStyleSheet(STYLE)
+    from qt_material import apply_stylesheet
+    apply_stylesheet(app, theme="light_blue.xml", invert_secondary=True)
+    app.setStyleSheet(app.styleSheet().replace("text-transform: uppercase;", "text-transform: none;") + "\n" + STYLE)
     try:
         store = Storage(default_path())
     except Exception as exc:

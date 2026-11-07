@@ -8,6 +8,43 @@ from quickbox.storage import Item, Storage
 from quickbox.ui import MainWindow, ItemDialog, resize_hit_test
 
 
+def test_unlock_automatically_after_correct_password(tmp_path):
+    from quickbox.ui import UnlockDialog
+    app = QApplication.instance() or QApplication([])
+    store = Storage(tmp_path / "data.db")
+    store.initialize("correct-password")
+    store.key = None
+    dialog = UnlockDialog(store)
+    dialog.password.setText("wrong")
+    dialog.try_unlock()
+    assert dialog.result() != dialog.DialogCode.Accepted
+    dialog.password.setText("correct-password")
+    dialog.try_unlock()
+    assert dialog.result() == dialog.DialogCode.Accepted
+    store.close()
+
+
+def test_detail_click_copies_fields_and_command(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    store = Storage(tmp_path / "data.db")
+    store.initialize("secret")
+    store.create(Item(kind="website", name="Site", url="https://example.com", username="alice", password="secret123"))
+    store.create(Item(kind="command", name="Command", content="git status"))
+    window = MainWindow(store)
+    window.items.setCurrentRow(0)
+    window.detail_fields["url"].click()
+    assert app.clipboard().text() == "https://example.com"
+    window.detail_fields["username"].click()
+    assert app.clipboard().text() == "alice"
+    window.password.click()
+    assert app.clipboard().text() == "secret123"
+    row = next(window.items.item(i) for i in range(window.items.count()) if window.items.item(i).data(Qt.ItemDataRole.UserRole).kind == "command")
+    window.items.setCurrentItem(row)
+    window.detail_fields["content"].click()
+    assert app.clipboard().text() == "git status"
+    window.close()
+
+
 def test_border_hit_test_keeps_window_resizable():
     assert resize_hit_test(1, 1, 1000, 700) == 13
     assert resize_hit_test(999, 350, 1000, 700) == 11

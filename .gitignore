@@ -1,6 +1,7 @@
 .venv/
 .deps/
 .qtdeps/
+.theme/
 .tools/
 .testtmp*/
 __pycache__/

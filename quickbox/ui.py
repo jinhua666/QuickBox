@@ -130,6 +130,20 @@ class WindowControl(QPushButton):
         painter.end()
 
 
+class CopyPasswordField(QLineEdit):
+    def __init__(self, on_click):
+        super().__init__()
+        self.on_click = on_click
+
+    def click(self):
+        self.on_click()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.click()
+        super().mousePressEvent(event)
+
+
 class UnlockDialog(QDialog):
     def __init__(self, store):
         super().__init__()
@@ -158,17 +172,48 @@ class UnlockDialog(QDialog):
         self.confirm.setPlaceholderText("再次输入主密码")
         if not store.initialized:
             layout.addWidget(self.confirm)
-        buttons = QHBoxLayout()
-        cancel = QPushButton("取消")
-        cancel.clicked.connect(self.reject)
-        submit = QPushButton("解锁" if store.initialized else "创建空间")
-        submit.setObjectName("primary")
-        submit.setDefault(True)
-        submit.clicked.connect(self.submit)
-        buttons.addStretch()
-        buttons.addWidget(cancel)
-        buttons.addWidget(submit)
-        layout.addLayout(buttons)
+        if store.initialized:
+            self.unlock_timer = QTimer(self)
+            self.unlock_timer.setSingleShot(True)
+            self.unlock_timer.setInterval(600)
+            self.unlock_timer.timeout.connect(self.try_unlock)
+            self.password.textChanged.connect(lambda text: self.unlock_timer.start() if text else self.unlock_timer.stop())
+            self.password.returnPressed.connect(self.try_unlock)
+        else:
+            buttons = QHBoxLayout()
+            cancel = QPushButton("取消")
+            cancel.clicked.connect(self.reject)
+            submit = QPushButton("创建空间")
+            submit.setObjectName("primary")
+            submit.setDefault(True)
+            submit.clicked.connect(self.submit)
+            buttons.addStretch()
+            buttons.addWidget(cancel)
+            buttons.addWidget(submit)
+            layout.addLayout(buttons)
+
+    def try_unlock(self):
+        value = self.password.text()
+        if not value:
+            return
+        try:
+            self.store.unlock(value)
+        except InvalidPassword:
+            return
+        except Exception as exc:
+            self.unlock_timer.stop()
+            QMessageBox.critical(self, "无法打开数据", str(exc))
+            return
+        self.unlock_timer.stop()
+        self.password.clear()
+        self.accept()
+
+    def reject(self):
+        if hasattr(self, "unlock_timer"):
+            self.unlock_timer.stop()
+        self.password.clear()
+        self.confirm.clear()
+        super().reject()
 
     def submit(self):
         value = self.password.text()
@@ -463,8 +508,6 @@ class MainWindow(QMainWindow):
         self.items.setMinimumWidth(310)
         self.items.currentItemChanged.connect(self.select_item)
         self.items.itemDoubleClicked.connect(self.open_item)
-        self.items.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.items.customContextMenuRequested.connect(self.show_context_menu)
         self.list_stack = QStackedWidget()
         self.list_stack.addWidget(self.items)
         empty = QFrame()
@@ -541,11 +584,25 @@ class MainWindow(QMainWindow):
         self.detail_text.setWordWrap(True)
         self.detail_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         detail_content_layout.addWidget(self.detail_text)
+        self.detail_fields = {}
+        for key, label in [("url", "网址"), ("username", "用户名"), ("content", "命令")]:
+            caption = QLabel(label + "  ·  点击复制")
+            caption.setObjectName("fieldCaption")
+            button = QPushButton()
+            button.setObjectName("copyField")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda checked=False, field=key: self.copy_value(field))
+            detail_content_layout.addWidget(caption)
+            detail_content_layout.addWidget(button)
+            self.detail_fields[key] = button
+            self.detail_fields[key + "_label"] = caption
         self.password_label = QLabel("密码")
         self.password_label.setObjectName("fieldCaption")
         detail_content_layout.addWidget(self.password_label)
         password_row = QHBoxLayout()
-        self.password = QLineEdit()
+        self.password = CopyPasswordField(lambda: self.copy_value("password"))
+        self.password.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.password.setToolTip("点击复制密码")
         self.password.setObjectName("detailPassword")
         self.password.setReadOnly(True)
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -558,7 +615,7 @@ class MainWindow(QMainWindow):
         detail_content_layout.addLayout(password_row)
         detail_content_layout.addStretch()
         detail_layout.addWidget(detail_scroll, 1)
-        self.hint = QLabel("双击项目打开网址 · 右键查看更多操作")
+        self.hint = QLabel("双击项目打开网址 · 点击信息复制")
         self.hint.setObjectName("hint")
         self.hint.setWordWrap(True)
         detail_layout.addWidget(self.hint)
@@ -651,11 +708,17 @@ class MainWindow(QMainWindow):
         self.detail_icon.setText("⌘" if item and item.kind == "command" else "↗" if item else "◇")
         parts = []
         if item:
-            for label, value in [("网站地址", item.url), ("用户名", item.username), ("登录方式", item.login_method), ("命令内容", item.content), ("备注", item.notes)]:
+            for label, value in [("登录方式", item.login_method), ("备注", item.notes)]:
                 if value:
                     parts.append(f"{label}\n{value}")
-        self.detail_text.setText("\n\n".join(parts) if parts else ("暂无其他信息" if item else "从左侧列表选择一项\n即可在这里查看内容。"))
+        self.detail_text.setText("\n\n".join(parts) if parts else ("" if item else "从左侧列表选择一项\n即可在这里查看内容。"))
         self.detail_text.setTextFormat(Qt.TextFormat.PlainText)
+        for key in ("url", "username", "content"):
+            value = getattr(item, key, "") if item else ""
+            self.detail_fields[key].setText(value)
+            self.detail_fields[key].setToolTip(value)
+            self.detail_fields[key].setVisible(bool(value))
+            self.detail_fields[key + "_label"].setVisible(bool(value))
         has_password = bool(item and item.password)
         self.password.setText(item.password if has_password else "")
         self.password.setVisible(has_password)
@@ -699,24 +762,6 @@ class MainWindow(QMainWindow):
             else:
                 self.store.record_usage(item.id)
                 self.refresh_timer.start(0)
-
-    def show_context_menu(self, position):
-        row = self.items.itemAt(position)
-        if not row:
-            return
-        self.items.setCurrentItem(row)
-        item = self.current
-        menu = QMenu(self)
-        if item.url:
-            menu.addAction("打开网址", lambda: self.open_item(row))
-            menu.addAction("复制网址", lambda: self.copy_value("url"))
-        if item.username:
-            menu.addAction("复制用户名", lambda: self.copy_value("username"))
-        if item.password:
-            menu.addAction("复制密码", lambda: self.copy_value("password"))
-        if item.content:
-            menu.addAction("复制命令", lambda: self.copy_value("content"))
-        menu.exec(self.items.viewport().mapToGlobal(position))
 
     def copy_value(self, field):
         if not self.current:
@@ -780,7 +825,7 @@ QListWidget#navigation { background: transparent; border: 0; outline: 0; padding
 QListWidget#navigation::item { border-radius: 8px; min-height: 43px; padding-left: 12px; color: #a8b8d0; margin: 2px 0; }
 QListWidget#navigation::item:selected { background: #344b6c; color: #ffffff; font-weight: 700; }
 QListWidget#navigation::item:hover:!selected { background: #293b56; color: #f2f6ff; }
-QPushButton { background: white; border: 1px solid #dfe6ee; border-radius: 8px; padding: 9px 16px; color: #485b74; }
+QPushButton { background: white; border: 1px solid #dfe6ee; border-radius: 8px; padding: 9px 16px; color: #485b74; text-transform: none; }
 QPushButton:hover { background: #f4f7fd; border-color: #cbd6e9; }
 QPushButton#primary { background: #506ed4; border: 1px solid #506ed4; color: white; font-weight: 700; padding: 10px 19px; }
 QPushButton#primary:hover { background: #415fc5; }
@@ -788,6 +833,8 @@ QPushButton#aboutButton { text-align: left; background: transparent; border: 0; 
 QPushButton#aboutButton:hover { background: #293b56; color: #ffffff; }
 QPushButton#smallButton, QPushButton#dangerButton, QPushButton#subtleButton { padding: 6px 10px; font-size: 11px; background: #f2f5fa; border: 0; }
 QPushButton#dangerButton { color: #c76a72; }
+QPushButton#copyField { text-align: left; background: #f5f7fb; border: 1px solid #e7edf4; padding: 9px; }
+QPushButton#copyField:hover { background: #edf2ff; border-color: #b8c8ed; }
 QPushButton:disabled { color: #c7cfdb; }
 QPushButton#typeButton { min-height: 30px; text-align: left; padding: 8px 16px; background: #ffffff; border: 1px solid #e2e8f1; color: #708097; }
 QPushButton#typeButton:checked { background: #edf2ff; border: 1px solid #aebfe9; color: #4867bc; font-weight: 700; }
@@ -799,7 +846,7 @@ QLabel#formHint { color: #a4afbe; font-size: 11px; }
 QLineEdit, QTextEdit { background: #fbfcfe; border: 1px solid #e2e8f0; border-radius: 8px; padding: 9px 11px; selection-background-color: #667ce4; }
 QLineEdit:focus, QTextEdit:focus { background: #ffffff; border: 1px solid #8fa9eb; }
 QLineEdit#search { min-height: 27px; padding: 8px 12px; background: #ffffff; border: 1px solid #e5eaf2; }
-QListWidget#itemList { background: transparent; border: 0; outline: 0; padding: 0; }
+QListWidget#itemList, QListWidget#itemList QWidget { background: transparent; border: 0; outline: 0; padding: 0; }
 QListWidget#itemList::item { background: #ffffff; border: 1px solid #e9edf3; border-radius: 11px; margin-bottom: 7px; }
 QListWidget#itemList::item:selected { background: #edf3ff; border: 1px solid #b9c9eb; }
 QListWidget#itemList::item:hover:!selected { background: #fbfcff; border: 1px solid #d2dceb; }
