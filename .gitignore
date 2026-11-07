@@ -1,0 +1,14 @@
+.venv/
+.deps/
+.qtdeps/
+.tools/
+.testtmp*/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+QuickBox.spec
+*.pyc
+*.db
+*.db-*
+*.backup*
