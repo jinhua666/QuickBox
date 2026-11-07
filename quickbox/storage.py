@@ -166,14 +166,11 @@ class Storage:
         with self.db:
             self.db.execute("DELETE FROM items WHERE id=?", (item_id,))
 
-    def list_items(self, kind=None, query="", favorites=False, sort="manual", now=None):
+    def list_items(self, kind=None, query="", favorites=False, now=None):
         key = self._require_key()
         rows = self.db.execute("SELECT * FROM items ORDER BY position,id").fetchall()
-        if sort == "smart":
-            timestamp = time.time() if now is None else now
-            rows = sorted(rows, key=lambda row: (-row["usage_score"] * 2 ** (-max(0, timestamp - row["usage_updated"]) / HALF_LIFE_SECONDS), row["position"], row["id"]))
-        elif sort != "manual":
-            raise ValueError("无效的排序方式")
+        timestamp = time.time() if now is None else now
+        rows = sorted(rows, key=lambda row: (-row["usage_score"] * 2 ** (-max(0, timestamp - row["usage_updated"]) / HALF_LIFE_SECONDS), row["position"], row["id"]))
         result = []
         for row in rows:
             item = Item(id=row["id"], kind=row["kind"], name=row["name"], url=row["url"], username=row["username"], login_method=row["login_method"],
@@ -196,35 +193,6 @@ class Storage:
             elapsed = max(0, timestamp - row["usage_updated"])
             score = row["usage_score"] * 2 ** (-elapsed / HALF_LIFE_SECONDS) + 1
             self.db.execute("UPDATE items SET usage_score=?, usage_updated=? WHERE id=?", (score, max(timestamp, row["usage_updated"]), item_id))
-
-    def sort_mode(self):
-        self._require_key()
-        row = self.db.execute("SELECT value FROM settings WHERE key='sort_mode'").fetchone()
-        return row[0] if row and row[0] in ("smart", "manual") else "smart"
-
-    def set_sort_mode(self, mode):
-        self._require_key()
-        if mode not in ("smart", "manual"):
-            raise ValueError("无效的排序方式")
-        with self.db:
-            self.db.execute("INSERT OR REPLACE INTO settings (key,value) VALUES ('sort_mode',?)", (mode,))
-
-    def move(self, item_id: int, direction: int, visible_ids=None):
-        self._require_key()
-        if direction not in (-1, 1):
-            raise ValueError("无效的排序方向")
-        rows = self.db.execute("SELECT id,position FROM items ORDER BY position,id").fetchall()
-        if visible_ids is not None:
-            visible_ids = set(visible_ids)
-            rows = [row for row in rows if row["id"] in visible_ids]
-        index = next((i for i, row in enumerate(rows) if row["id"] == item_id), None)
-        if index is None:
-            raise ValueError("条目不存在")
-        other = index + direction
-        if 0 <= other < len(rows):
-            with self.db:
-                self.db.execute("UPDATE items SET position=? WHERE id=?", (rows[other]["position"], item_id))
-                self.db.execute("UPDATE items SET position=? WHERE id=?", (rows[index]["position"], rows[other]["id"]))
 
     def close(self):
         self.key = None

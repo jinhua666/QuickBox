@@ -5,9 +5,9 @@ import sys
 
 from PySide6.QtCore import Qt, QTimer, QUrl, QSize, QPointF
 from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPen, QColor, QPixmap
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QFrame,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QFrame, QGridLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget)
+    QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTextEdit, QVBoxLayout, QWidget)
 from .storage import Item, InvalidPassword
 from .version import VERSION
 
@@ -37,7 +37,7 @@ def navigation_icon(kind):
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QPen(QColor("#8592ab"), 1.4))
+    painter.setPen(QPen(QColor("#a6b6ce"), 1.4))
     if kind == "all":
         for x, y in ((3, 3), (11, 3), (3, 11), (11, 11)):
             painter.drawRoundedRect(x, y, 5, 5, 1, 1)
@@ -50,6 +50,18 @@ def navigation_icon(kind):
         painter.drawLine(5, 7, 8, 10)
         painter.drawLine(8, 10, 5, 13)
         painter.drawLine(10, 13, 14, 13)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def search_icon():
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#97a3b5"), 1.6))
+    painter.drawEllipse(3, 3, 10, 10)
+    painter.drawLine(12, 12, 17, 17)
     painter.end()
     return QIcon(pixmap)
 
@@ -188,31 +200,61 @@ class ItemDialog(QDialog):
         self.original = item
         self.setWindowTitle("编辑项目" if item else "新增项目")
         self.setWindowIcon(QIcon(str(asset_path("quickbox.ico"))))
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(650)
+        screen = parent.screen() if parent else QApplication.primaryScreen()
+        if screen:
+            self.setMaximumHeight(int(screen.availableGeometry().height() * 0.9))
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(30, 24, 30, 26)
         layout.setSpacing(12)
-        title = QLabel("编辑项目" if item else "添加到 QuickBox")
+        eyebrow = QLabel("QUICKBOX   /   YOUR SPACE")
+        eyebrow.setObjectName("dialogEyebrow")
+        layout.addWidget(eyebrow)
+        title = QLabel("编辑项目" if item else "添加新项目")
         title.setObjectName("dialogTitle")
         layout.addWidget(title)
-        subtitle = QLabel("把常用信息放在一起，随时轻松找到。")
+        subtitle = QLabel("为常用信息找个安心的位置。")
         subtitle.setObjectName("muted")
         layout.addWidget(subtitle)
+        layout.addSpacing(5)
+        type_caption = QLabel("选择类型")
+        type_caption.setObjectName("fieldCaption")
+        layout.addWidget(type_caption)
         choices = QHBoxLayout()
+        choices.setSpacing(10)
         self.type_group = QButtonGroup(self)
         self.type_buttons = {}
         selected = item.kind if item else initial_kind
         for key, text in TYPES.items():
-            button = QPushButton(text)
+            button = QPushButton(("↗   网站 / 账号" if key == "website" else "⌘   常用命令"))
             button.setObjectName("typeButton")
             button.setCheckable(True)
             button.setChecked(selected == key)
             button.setEnabled(item is None or item.kind == key)
             self.type_group.addButton(button)
             self.type_buttons[key] = button
-            choices.addWidget(button)
-        choices.addStretch()
+            choices.addWidget(button, 1)
         layout.addLayout(choices)
+        form_card = QFrame()
+        form_card.setObjectName("formCard")
+        form_layout = QVBoxLayout(form_card)
+        form_layout.setContentsMargins(20, 17, 20, 18)
+        form_layout.setSpacing(12)
+        form_head = QHBoxLayout()
+        form_title = QLabel("项目信息")
+        form_title.setObjectName("formTitle")
+        self.form_hint = QLabel()
+        self.form_hint.setObjectName("formHint")
+        form_head.addWidget(form_title)
+        form_head.addStretch()
+        form_head.addWidget(self.form_hint)
+        form_layout.addLayout(form_head)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(10)
+        grid.setAlignment(Qt.AlignmentFlag.AlignTop)
+        form_layout.addLayout(grid)
+        form_layout.addStretch()
         self.name = QLineEdit(item.name if item else "")
         self.name.setPlaceholderText("例如：常用工作平台")
         self.url = QLineEdit(item.url if item else "")
@@ -235,25 +277,34 @@ class ItemDialog(QDialog):
         password_layout.addWidget(reveal)
         self.content = QTextEdit(item.content if item else "")
         self.content.setPlaceholderText("输入命令内容")
-        self.content.setFixedHeight(90)
+        self.content.setFixedHeight(88)
         self.notes = QTextEdit(item.notes if item else "")
         self.notes.setPlaceholderText("添加一点备注，选填")
-        self.notes.setFixedHeight(75)
+        self.notes.setFixedHeight(64)
         self.fields = {}
-        for key, label, widget in [("name", "名称  *", self.name), ("url", "网站地址", self.url),
-                                   ("username", "用户名", self.username), ("login_method", "登录方式", self.login_method),
-                                   ("password", "密码", password_row), ("content", "命令内容", self.content),
-                                   ("notes", "备注", self.notes)]:
+        for key, label, widget, row, column, span in [
+            ("name", "名称  *", self.name, 0, 0, 2), ("url", "网站地址", self.url, 1, 0, 2),
+            ("username", "用户名", self.username, 2, 0, 1), ("login_method", "登录方式", self.login_method, 2, 1, 1),
+            ("password", "密码", password_row, 3, 0, 2), ("content", "命令内容  *", self.content, 1, 0, 2),
+            ("notes", "备注", self.notes, 4, 0, 2)]:
             container = QWidget()
             field_layout = QVBoxLayout(container)
-            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setContentsMargins(0, 0, 0, 5)
             field_layout.setSpacing(5)
             caption = QLabel(label)
             caption.setObjectName("fieldCaption")
             field_layout.addWidget(caption)
             field_layout.addWidget(widget)
             self.fields[key] = container
-            layout.addWidget(container)
+            grid.addWidget(container, row, column, 1, span)
+        form_scroll = QScrollArea()
+        form_scroll.setObjectName("formScroll")
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        form_scroll.setMinimumHeight(180)
+        form_scroll.setWidget(form_card)
+        layout.addWidget(form_scroll, 1)
         actions = QHBoxLayout()
         actions.addStretch()
         cancel = QPushButton("取消")
@@ -267,12 +318,14 @@ class ItemDialog(QDialog):
         layout.addLayout(actions)
         self.type_group.buttonClicked.connect(self.update_fields)
         self.update_fields()
+        self.resize(680, 770)
 
     def selected_kind(self):
         return next((key for key, button in self.type_buttons.items() if button.isChecked()), "website")
 
     def update_fields(self, *_):
         visible = {"name", "notes"} | ({"url", "username", "login_method", "password"} if self.selected_kind() == "website" else {"content"})
+        self.form_hint.setText("带 * 为必填项")
         for key, container in self.fields.items():
             container.setVisible(key in visible)
         self.adjustSize()
@@ -306,7 +359,6 @@ class MainWindow(QMainWindow):
         self.current = None
         self.copy_generation = 0
         self.copied_password = None
-        self.order_mode = store.sort_mode()
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
         self.refresh_timer.timeout.connect(self.refresh)
@@ -329,15 +381,18 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(188)
+        sidebar.setFixedWidth(208)
         nav = QVBoxLayout(sidebar)
-        nav.setContentsMargins(16, 26, 16, 18)
-        nav.setSpacing(10)
+        nav.setContentsMargins(18, 29, 18, 20)
+        nav.setSpacing(9)
+        brand_caption = QLabel("YOUR PERSONAL SPACE")
+        brand_caption.setObjectName("sidebarCaption")
+        nav.addWidget(brand_caption)
         brand = QLabel("你的资料库")
         brand.setObjectName("sidebarHeading")
         nav.addWidget(brand)
         sub = QLabel("一切常用，都在这里")
-        sub.setObjectName("muted")
+        sub.setObjectName("sidebarSub")
         nav.addWidget(sub)
         nav.addSpacing(22)
         label = QLabel("浏览")
@@ -353,7 +408,7 @@ class MainWindow(QMainWindow):
             row.setData(Qt.ItemDataRole.UserRole, key)
             self.categories.addItem(row)
         nav.addWidget(self.categories, 1)
-        privacy = QLabel("●  数据保存在本机")
+        privacy = QLabel("●   数据保存在本机")
         privacy.setObjectName("privacyLabel")
         nav.addWidget(privacy)
         about = QPushButton("↻   检查更新")
@@ -365,10 +420,14 @@ class MainWindow(QMainWindow):
         main = QFrame()
         main.setObjectName("mainArea")
         main_layout = QVBoxLayout(main)
-        main_layout.setContentsMargins(32, 28, 32, 28)
-        main_layout.setSpacing(18)
+        main_layout.setContentsMargins(36, 27, 36, 30)
+        main_layout.setSpacing(15)
         header = QHBoxLayout()
         titlebox = QVBoxLayout()
+        titlebox.setSpacing(4)
+        page_caption = QLabel("QUICK ACCESS   /   YOUR LIBRARY")
+        page_caption.setObjectName("pageCaption")
+        titlebox.addWidget(page_caption)
         self.page_title = QLabel("全部项目")
         self.page_title.setObjectName("pageTitle")
         self.page_subtitle = QLabel("你的信息，一目了然")
@@ -377,7 +436,7 @@ class MainWindow(QMainWindow):
         titlebox.addWidget(self.page_subtitle)
         header.addLayout(titlebox)
         header.addStretch()
-        add = QPushButton("＋  新建项目")
+        add = QPushButton("＋   新建项目")
         add.setObjectName("primary")
         add.setMinimumHeight(42)
         add.clicked.connect(self.add_item)
@@ -385,6 +444,7 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(header)
         self.search = QLineEdit()
         self.search.setObjectName("search")
+        self.search.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search.setPlaceholderText("搜索名称、网址、用户名、登录方式或备注")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.refresh)
@@ -394,16 +454,7 @@ class MainWindow(QMainWindow):
         self.count_label.setObjectName("sectionLabel")
         list_header.addWidget(self.count_label)
         list_header.addStretch()
-        self.sort_button = QPushButton()
-        self.sort_button.setObjectName("sortButton")
-        self.sort_button.setToolTip("智能排序根据使用频率和近期使用情况调整顺序")
-        sort_menu = QMenu(self.sort_button)
-        sort_menu.addAction("智能排序", lambda: self.set_sort_mode("smart"))
-        sort_menu.addAction("手动排序", lambda: self.set_sort_mode("manual"))
-        self.sort_button.setMenu(sort_menu)
-        list_header.addWidget(self.sort_button)
         main_layout.addLayout(list_header)
-        self.sort_button.setText("智能排序" if self.order_mode == "smart" else "手动排序")
 
         body = QHBoxLayout()
         body.setSpacing(18)
@@ -414,7 +465,27 @@ class MainWindow(QMainWindow):
         self.items.itemDoubleClicked.connect(self.open_item)
         self.items.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.items.customContextMenuRequested.connect(self.show_context_menu)
-        body.addWidget(self.items, 1)
+        self.list_stack = QStackedWidget()
+        self.list_stack.addWidget(self.items)
+        empty = QFrame()
+        empty.setObjectName("emptyState")
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_icon = QLabel("✦")
+        empty_icon.setObjectName("emptyIcon")
+        empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_title = QLabel("这里还没有项目")
+        self.empty_title.setObjectName("emptyTitle")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_hint = QLabel("添加常用网站或命令，随时轻松找到。")
+        self.empty_hint.setObjectName("muted")
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(empty_icon, 0, Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addSpacing(6)
+        empty_layout.addWidget(self.empty_title)
+        empty_layout.addWidget(self.empty_hint)
+        self.list_stack.addWidget(empty)
+        body.addWidget(self.list_stack, 1)
         detail = QFrame()
         detail.setObjectName("detailCard")
         detail.setFixedWidth(294)
@@ -525,8 +596,11 @@ class MainWindow(QMainWindow):
         self.page_title.setText({"all": "全部项目", "website": "网站", "command": "常用命令"}.get(key, "全部项目"))
         self.page_subtitle.setText({"all": "你的信息，一目了然", "website": "常用网站和登录信息，随手可得", "command": "常用命令，快速查找与复制"}.get(key, "你的信息，一目了然"))
         old_id = self.current.id if self.current else None
-        results = self.store.list_items(kind=key if key in TYPES else None, query=self.search.text(), sort=self.order_mode)
+        results = self.store.list_items(kind=key if key in TYPES else None, query=self.search.text())
         self.count_label.setText(f"项目  /  {len(results)}")
+        self.list_stack.setCurrentIndex(0 if results else 1)
+        self.empty_title.setText("没有找到匹配项目" if self.search.text().strip() else "这里还没有项目")
+        self.empty_hint.setText("试试其他关键词。" if self.search.text().strip() else "添加常用网站或命令，随时轻松找到。")
         self.items.clear()
         for item in results:
             row = QListWidgetItem()
@@ -617,12 +691,6 @@ class MainWindow(QMainWindow):
             self.store.delete(self.current.id)
             self.refresh()
 
-    def move(self, direction):
-        if self.current and self.order_mode == "manual":
-            visible = [self.items.item(i).data(Qt.ItemDataRole.UserRole).id for i in range(self.items.count())]
-            self.store.move(self.current.id, direction, visible)
-            self.refresh()
-
     def open_item(self, row):
         item = row.data(Qt.ItemDataRole.UserRole) if row else None
         if item and item.kind == "website" and item.url:
@@ -631,12 +699,6 @@ class MainWindow(QMainWindow):
             else:
                 self.store.record_usage(item.id)
                 self.refresh_timer.start(0)
-
-    def set_sort_mode(self, mode):
-        self.store.set_sort_mode(mode)
-        self.order_mode = mode
-        self.sort_button.setText("智能排序" if mode == "smart" else "手动排序")
-        self.refresh()
 
     def show_context_menu(self, position):
         row = self.items.itemAt(position)
@@ -654,10 +716,6 @@ class MainWindow(QMainWindow):
             menu.addAction("复制密码", lambda: self.copy_value("password"))
         if item.content:
             menu.addAction("复制命令", lambda: self.copy_value("content"))
-        if self.order_mode == "manual":
-            menu.addSeparator()
-            menu.addAction("上移", lambda: self.move(-1))
-            menu.addAction("下移", lambda: self.move(1))
         menu.exec(self.items.viewport().mapToGlobal(position))
 
     def copy_value(self, field):
@@ -699,50 +757,61 @@ class MainWindow(QMainWindow):
 
 
 STYLE = """
-QWidget { font-family: 'Microsoft YaHei UI', 'Segoe UI'; font-size: 13px; color: #26314b; }
-QMainWindow, QDialog { background: #f6f8fc; }
-QFrame#titleBar { background: #ffffff; border-bottom: 1px solid #e9edf5; }
-QLabel#titleLabel { font-size: 12px; font-weight: 600; color: #35425b; }
+QWidget { font-family: 'Microsoft YaHei UI', 'Segoe UI'; font-size: 13px; color: #28374d; }
+QMainWindow, QDialog { background: #f3f5f9; }
+QFrame#titleBar { background: #ffffff; border-bottom: 1px solid #ebedf2; }
+QLabel#titleLabel { font-size: 12px; font-weight: 700; color: #33415a; }
 QPushButton#windowButton, QPushButton#closeButton { background: transparent; border: 0; border-radius: 5px; padding: 0; font-size: 17px; color: #7c879b; }
 QPushButton#windowButton:hover { background: #edf1f8; color: #2d3950; }
 QPushButton#closeButton:hover { background: #e95c65; color: white; }
-QFrame#sidebar { background: #ffffff; border-right: 1px solid #e9edf4; }
-QFrame#mainArea { background: #f6f8fc; }
-QLabel#sidebarHeading { font-size: 16px; font-weight: 700; color: #293653; }
-QLabel#pageTitle { font-size: 25px; font-weight: 700; color: #202d49; }
-QLabel#dialogTitle { font-size: 23px; font-weight: 700; color: #202d49; }
-QLabel#eyebrow, QLabel#navCaption, QLabel#sectionLabel { font-size: 11px; font-weight: 700; color: #8a96aa; }
-QLabel#muted, QLabel#hint { color: #96a1b2; font-size: 12px; }
-QLabel#privacyLabel { color: #8fa69e; font-size: 11px; padding: 5px 9px; }
+QFrame#sidebar { background: #1c2b43; border: 0; }
+QFrame#mainArea { background: #f3f5f9; }
+QLabel#sidebarCaption { color: #8198b8; font-size: 9px; font-weight: 700; }
+QLabel#sidebarHeading { font-size: 19px; font-weight: 700; color: #f4f7ff; }
+QLabel#sidebarSub { color: #91a3bd; font-size: 12px; }
+QLabel#pageCaption, QLabel#dialogEyebrow { font-size: 10px; font-weight: 700; color: #6480c6; }
+QLabel#pageTitle { font-size: 26px; font-weight: 700; color: #1e2b40; }
+QLabel#dialogTitle { font-size: 23px; font-weight: 700; color: #1e2b40; }
+QLabel#eyebrow, QLabel#sectionLabel { font-size: 11px; font-weight: 700; color: #8390a4; }
+QLabel#navCaption { color: #7388a7; font-size: 11px; font-weight: 600; padding-left: 10px; }
+QLabel#muted, QLabel#hint { color: #8f9bae; font-size: 12px; }
+QLabel#privacyLabel { background: #24364f; border-radius: 8px; color: #a7c5be; font-size: 11px; padding: 10px; }
 QListWidget#navigation { background: transparent; border: 0; outline: 0; padding: 0; }
-QListWidget#navigation::item { border-radius: 8px; min-height: 42px; padding-left: 15px; color: #77839a; margin: 2px 0; }
-QListWidget#navigation::item:selected { background: #edf1ff; color: #5068d8; font-weight: 700; }
-QListWidget#navigation::item:hover:!selected { background: #f5f7fb; }
-QPushButton { background: white; border: 1px solid #e0e6ef; border-radius: 8px; padding: 9px 16px; color: #4a5871; }
-QPushButton:hover { background: #f4f6fc; border-color: #cbd6e9; }
-QPushButton#primary { background: #586fdf; border: 1px solid #586fdf; color: white; font-weight: 600; padding: 10px 19px; }
-QPushButton#primary:hover { background: #4960cf; }
-QPushButton#aboutButton { text-align: left; background: transparent; border: 0; color: #9ba7b8; padding: 10px; }
-QPushButton#smallButton, QPushButton#dangerButton, QPushButton#subtleButton { padding: 5px 9px; font-size: 11px; background: #f6f8fc; border: 0; }
-QPushButton#sortButton { background: #ffffff; border: 1px solid #e9edf5; border-radius: 7px; padding: 5px 12px; color: #73819b; font-size: 11px; }
-QPushButton#sortButton::menu-indicator { subcontrol-origin: padding; subcontrol-position: right center; width: 0px; }
+QListWidget#navigation::item { border-radius: 8px; min-height: 43px; padding-left: 12px; color: #a8b8d0; margin: 2px 0; }
+QListWidget#navigation::item:selected { background: #344b6c; color: #ffffff; font-weight: 700; }
+QListWidget#navigation::item:hover:!selected { background: #293b56; color: #f2f6ff; }
+QPushButton { background: white; border: 1px solid #dfe6ee; border-radius: 8px; padding: 9px 16px; color: #485b74; }
+QPushButton:hover { background: #f4f7fd; border-color: #cbd6e9; }
+QPushButton#primary { background: #506ed4; border: 1px solid #506ed4; color: white; font-weight: 700; padding: 10px 19px; }
+QPushButton#primary:hover { background: #415fc5; }
+QPushButton#aboutButton { text-align: left; background: transparent; border: 0; color: #a2b3ca; padding: 10px; }
+QPushButton#aboutButton:hover { background: #293b56; color: #ffffff; }
+QPushButton#smallButton, QPushButton#dangerButton, QPushButton#subtleButton { padding: 6px 10px; font-size: 11px; background: #f2f5fa; border: 0; }
 QPushButton#dangerButton { color: #c76a72; }
 QPushButton:disabled { color: #c7cfdb; }
-QPushButton#typeButton { padding: 8px 17px; background: #f1f4f9; border: 1px solid transparent; }
-QPushButton#typeButton:checked { background: #edf1ff; border: 1px solid #cbd5ff; color: #5267d0; font-weight: 600; }
-QLineEdit, QTextEdit { background: #ffffff; border: 1px solid #e1e7f0; border-radius: 8px; padding: 9px 11px; selection-background-color: #667ce4; }
-QLineEdit:focus, QTextEdit:focus { border: 1px solid #a7b6f4; }
-QLineEdit#search { min-height: 25px; padding-left: 15px; background: #ffffff; }
+QPushButton#typeButton { min-height: 30px; text-align: left; padding: 8px 16px; background: #ffffff; border: 1px solid #e2e8f1; color: #708097; }
+QPushButton#typeButton:checked { background: #edf2ff; border: 1px solid #aebfe9; color: #4867bc; font-weight: 700; }
+QPushButton#typeButton:checked:disabled { background: #edf2ff; color: #4867bc; }
+QFrame#formCard { background: #ffffff; border: 1px solid #e5eaf1; border-radius: 12px; }
+QScrollArea#formScroll { background: transparent; border: 0; }
+QLabel#formTitle { color: #33445e; font-size: 13px; font-weight: 700; }
+QLabel#formHint { color: #a4afbe; font-size: 11px; }
+QLineEdit, QTextEdit { background: #fbfcfe; border: 1px solid #e2e8f0; border-radius: 8px; padding: 9px 11px; selection-background-color: #667ce4; }
+QLineEdit:focus, QTextEdit:focus { background: #ffffff; border: 1px solid #8fa9eb; }
+QLineEdit#search { min-height: 27px; padding: 8px 12px; background: #ffffff; border: 1px solid #e5eaf2; }
 QListWidget#itemList { background: transparent; border: 0; outline: 0; padding: 0; }
-QListWidget#itemList::item { background: #ffffff; border: 1px solid #e9edf5; border-radius: 10px; margin-bottom: 7px; }
-QListWidget#itemList::item:selected { background: #eef2ff; border: 1px solid #cbd5ff; }
-QListWidget#itemList::item:hover:!selected { background: #fbfcff; border: 1px solid #d4ddec; }
-QLabel#rowIcon, QLabel#detailIcon { background: #edf1ff; color: #657be1; border-radius: 11px; font-size: 20px; font-weight: 700; }
-QLabel#rowIconCommand { background: #eaf7f5; color: #58a99d; border-radius: 11px; font-size: 19px; font-weight: 700; }
+QListWidget#itemList::item { background: #ffffff; border: 1px solid #e9edf3; border-radius: 11px; margin-bottom: 7px; }
+QListWidget#itemList::item:selected { background: #edf3ff; border: 1px solid #b9c9eb; }
+QListWidget#itemList::item:hover:!selected { background: #fbfcff; border: 1px solid #d2dceb; }
+QLabel#rowIcon, QLabel#detailIcon { background: #eaf0ff; color: #5c79cd; border-radius: 11px; font-size: 20px; font-weight: 700; }
+QLabel#rowIconCommand { background: #e8f4ef; color: #5ca391; border-radius: 11px; font-size: 19px; font-weight: 700; }
 QLabel#rowTitle { color: #2d3951; font-size: 14px; font-weight: 600; background: transparent; }
 QLabel#rowSubtitle { color: #98a4b5; font-size: 12px; background: transparent; }
 QLabel#rowArrow { color: #aeb8c8; font-size: 22px; background: transparent; }
-QFrame#detailCard { background: #ffffff; border: 1px solid #e9edf5; border-radius: 12px; }
+QFrame#detailCard { background: #ffffff; border: 1px solid #e7ecf2; border-radius: 12px; }
+QFrame#emptyState { background: #ffffff; border: 1px solid #e8edf4; border-radius: 12px; }
+QLabel#emptyIcon { background: #edf2ff; color: #6b87d4; border-radius: 24px; font-size: 22px; min-width: 48px; min-height: 48px; max-width: 48px; max-height: 48px; }
+QLabel#emptyTitle { color: #51627b; font-size: 15px; font-weight: 700; }
 QWidget#detailContent, QScrollArea { background: #ffffff; border: 0; }
 QLabel#detailTitle { font-size: 18px; font-weight: 700; color: #27334d; }
 QLabel#detailText { color: #65728a; line-height: 1.5; }

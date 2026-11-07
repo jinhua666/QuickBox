@@ -68,6 +68,19 @@ def test_website_dialog_accepts_name_only_and_stores_login_method():
     assert dialog.item().url == "" and dialog.item().login_method == "微信扫码"
 
 
+def test_add_dialog_switches_between_website_and_command():
+    app = QApplication.instance() or QApplication([])
+    dialog = ItemDialog()
+    dialog.type_buttons["command"].click()
+    assert not dialog.fields["content"].isHidden()
+    assert dialog.fields["url"].isHidden()
+    dialog.name.setText("终端")
+    dialog.content.setPlainText("git status")
+    dialog.validate_and_accept()
+    assert dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.item().kind == "command" and dialog.item().content == "git status"
+
+
 def test_password_clipboard_does_not_clear_new_content(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     store = Storage(tmp_path / "data.db")
@@ -120,19 +133,20 @@ def test_double_click_opens_only_items_with_url(tmp_path, monkeypatch):
     assert app.clipboard().text() == ""
 
 
-def test_sorting_in_a_category_moves_visible_items(tmp_path):
+def test_saved_manual_setting_is_ignored_and_ui_uses_smart_sort(tmp_path):
     app = QApplication.instance() or QApplication([])
     store = Storage(tmp_path / "data.db")
     store.initialize("secret")
     store.create(Item(kind="website", name="First", url="https://first.example"))
-    store.create(Item(kind="command", name="Other", content="echo hi"))
-    store.create(Item(kind="website", name="Second", url="https://second.example"))
+    second = store.create(Item(kind="website", name="Second", url="https://second.example"))
+    with store.db:
+        store.db.execute("INSERT OR REPLACE INTO settings(key, value) VALUES ('sort_mode', 'manual')")
+    store.record_usage(second.id)
     window = MainWindow(store)
-    window.set_sort_mode("manual")
     window.categories.setCurrentRow(1)
-    window.items.setCurrentRow(1)
-    window.move(-1)
-    assert [store.list_items(kind="website")[i].name for i in range(2)] == ["Second", "First"]
+    assert window.items.item(0).data(Qt.ItemDataRole.UserRole).name == "Second"
+    assert not window.findChildren(QPushButton, "sortButton")
+    assert not hasattr(window, "set_sort_mode")
     window.close()
 
 

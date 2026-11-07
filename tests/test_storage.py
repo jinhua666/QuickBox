@@ -64,8 +64,8 @@ def test_usage_scores_decay_and_do_not_store_history(tmp_path):
     store.record_usage(first.id, now=100000)
     store.record_usage(first.id, now=100001)
     store.record_usage(second.id, now=100000 + 42 * day)
-    assert [i.id for i in store.list_items(sort="smart", now=100000 + 42 * day)] == [second.id, first.id]
-    assert [i.id for i in store.list_items(sort="manual")] == [first.id, second.id]
+    assert [i.id for i in store.list_items(now=100000 + 42 * day)] == [second.id, first.id]
+    assert not hasattr(store, "set_sort_mode") and not hasattr(store, "move")
     assert store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 2
     store.close()
 
@@ -110,7 +110,7 @@ def test_crud_search_favorites_and_sort(tmp_path):
     second = store.create(Item(kind="command", name="Beta", content="git status", favorite=True))
     assert [i.name for i in store.list_items(query="status")] == ["Beta"]
     assert [i.name for i in store.list_items(favorites=True)] == ["Beta"]
-    store.move(second.id, -1)
+    store.record_usage(second.id)
     assert [i.name for i in store.list_items()] == ["Beta", "Alpha"]
     first.name = "Changed"
     store.update(first)
