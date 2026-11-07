@@ -128,8 +128,112 @@ def test_sorting_in_a_category_moves_visible_items(tmp_path):
     store.create(Item(kind="command", name="Other", content="echo hi"))
     store.create(Item(kind="website", name="Second", url="https://second.example"))
     window = MainWindow(store)
+    window.set_sort_mode("manual")
     window.categories.setCurrentRow(1)
     window.items.setCurrentRow(1)
     window.move(-1)
     assert [store.list_items(kind="website")[i].name for i in range(2)] == ["Second", "First"]
     window.close()
+
+
+def test_smart_sort_counts_only_open_and_relevant_copy(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    store = Storage(tmp_path / "data.db")
+    store.initialize("secret")
+    site = store.create(Item(kind="website", name="Site", url="https://example.com", password="password"))
+    command = store.create(Item(kind="command", name="Command", content="git status"))
+    window = MainWindow(store)
+    window.items.setCurrentRow(0)
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] == 0
+    window.copy_value("password")
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] == 0
+    monkeypatch.setattr("quickbox.ui.QDesktopServices.openUrl", lambda url: True)
+    window.open_item(window.items.item(0))
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] > 0
+    row = next(window.items.item(i) for i in range(window.items.count()) if window.items.item(i).data(Qt.ItemDataRole.UserRole).id == command.id)
+    window.items.setCurrentItem(row)
+    window.copy_value("content")
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (command.id,)).fetchone()[0] > 0
+    window.close()
+
+
+def test_failed_open_does_not_count_but_copying_url_does(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    app = QApplication.instance() or QApplication([])
+    store = Storage(tmp_path / "data.db")
+    store.initialize("secret")
+    site = store.create(Item(kind="website", name="Site", url="https://example.com"))
+    window = MainWindow(store)
+    window.items.setCurrentRow(0)
+    monkeypatch.setattr("quickbox.ui.QDesktopServices.openUrl", lambda url: False)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    window.open_item(window.items.item(0))
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] == 0
+    window.copy_value("url")
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (site.id,)).fetchone()[0] > 0
+    window.close()
+
+
+def test_update_check_uses_background_worker(monkeypatch):
+    from quickbox.update_dialog import UpdateDialog
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr("quickbox.update_dialog.check_latest", lambda version: None)
+    dialog = UpdateDialog()
+    dialog.check_updates()
+    assert dialog.worker.wait(5000)
+    app.processEvents()
+    assert "最新版本" in dialog.status.text()
+    assert not dialog.install_button.isEnabled()
+    dialog.close()
+
+
+def test_update_requires_confirmation_before_launch(tmp_path, monkeypatch):
+    from quickbox.update_dialog import UpdateDialog
+    from quickbox.updates import Release
+    from PySide6.QtWidgets import QMessageBox
+    app = QApplication.instance() or QApplication([])
+    store = Storage(tmp_path / "data.db")
+    store.initialize("secret")
+    window = MainWindow(store)
+    window.show()
+    fake_installer = tmp_path / "download" / "QuickBox-Setup-0.2.0.exe"
+    fake_installer.parent.mkdir()
+    fake_installer.write_bytes(b"test")
+    info = Release("0.2.0", "release notes", "https://example.com", "0" * 64, 4)
+    monkeypatch.setattr("quickbox.update_dialog.check_latest", lambda version: info)
+    monkeypatch.setattr("quickbox.update_dialog.download_installer", lambda release: fake_installer)
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    launched = []
+    monkeypatch.setattr("quickbox.update_dialog.subprocess.Popen", lambda args, **kwargs: launched.append(args))
+    dialog = UpdateDialog(window)
+    dialog.check_updates()
+    assert dialog.worker.wait(5000)
+    app.processEvents()
+    assert dialog.install_button.isEnabled() and not launched
+    dialog.download_update()
+    assert dialog.worker.wait(5000)
+    app.processEvents()
+    assert launched == [[str(fake_installer)]]
+    assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_update_cancel_after_download_never_launches(tmp_path, monkeypatch):
+    from quickbox.update_dialog import UpdateDialog
+    from quickbox.updates import Release
+    from PySide6.QtWidgets import QMessageBox
+    app = QApplication.instance() or QApplication([])
+    path = tmp_path / "download" / "setup.exe"
+    path.parent.mkdir()
+    path.write_bytes(b"test")
+    responses = iter([QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No])
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: next(responses))
+    monkeypatch.setattr("quickbox.update_dialog.download_installer", lambda release: path)
+    launched = []
+    monkeypatch.setattr("quickbox.update_dialog.subprocess.Popen", lambda *args, **kwargs: launched.append(args))
+    dialog = UpdateDialog()
+    dialog.release = Release("0.2.0", "notes", "https://example.com", "0" * 64, 4)
+    dialog.download_update()
+    assert dialog.worker.wait(5000)
+    app.processEvents()
+    assert not launched and not path.exists()
+    dialog.close()

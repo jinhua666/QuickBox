@@ -3,13 +3,15 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import sqlite3
+import time
 from datetime import datetime
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+HALF_LIFE_SECONDS = 14 * 86400
 KINDS = {"website", "command"}
 
 
@@ -74,17 +76,21 @@ class Storage:
                     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL,
                     url TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '',
                     password BLOB, content TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', login_method TEXT NOT NULL DEFAULT '',
-                    favorite INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL)""")
+                    favorite INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL,
+                    usage_score REAL NOT NULL DEFAULT 0, usage_updated REAL NOT NULL DEFAULT 0)""")
                 self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         elif version < SCHEMA_VERSION:
             try:
                 self._backup_before_migration()
-                if version != 1:
+                if version not in (1, 2):
                     raise RuntimeError("此数据库版本尚无可用的迁移程序")
                 with self.db:
                     self.db.execute("BEGIN IMMEDIATE")
-                    self.db.execute("ALTER TABLE items ADD COLUMN login_method TEXT NOT NULL DEFAULT ''")
-                    self.db.execute("UPDATE items SET kind='website' WHERE kind IN ('account','document')")
+                    if version == 1:
+                        self.db.execute("ALTER TABLE items ADD COLUMN login_method TEXT NOT NULL DEFAULT ''")
+                        self.db.execute("UPDATE items SET kind='website' WHERE kind IN ('account','document')")
+                    self.db.execute("ALTER TABLE items ADD COLUMN usage_score REAL NOT NULL DEFAULT 0")
+                    self.db.execute("ALTER TABLE items ADD COLUMN usage_updated REAL NOT NULL DEFAULT 0")
                     self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             except Exception:
                 self.db.close()
@@ -160,9 +166,14 @@ class Storage:
         with self.db:
             self.db.execute("DELETE FROM items WHERE id=?", (item_id,))
 
-    def list_items(self, kind=None, query="", favorites=False):
+    def list_items(self, kind=None, query="", favorites=False, sort="manual", now=None):
         key = self._require_key()
         rows = self.db.execute("SELECT * FROM items ORDER BY position,id").fetchall()
+        if sort == "smart":
+            timestamp = time.time() if now is None else now
+            rows = sorted(rows, key=lambda row: (-row["usage_score"] * 2 ** (-max(0, timestamp - row["usage_updated"]) / HALF_LIFE_SECONDS), row["position"], row["id"]))
+        elif sort != "manual":
+            raise ValueError("无效的排序方式")
         result = []
         for row in rows:
             item = Item(id=row["id"], kind=row["kind"], name=row["name"], url=row["url"], username=row["username"], login_method=row["login_method"],
@@ -174,6 +185,29 @@ class Storage:
                 continue
             result.append(item)
         return result
+
+    def record_usage(self, item_id, now=None):
+        self._require_key()
+        timestamp = time.time() if now is None else now
+        with self.db:
+            row = self.db.execute("SELECT usage_score, usage_updated FROM items WHERE id=?", (item_id,)).fetchone()
+            if row is None:
+                raise ValueError("条目不存在")
+            elapsed = max(0, timestamp - row["usage_updated"])
+            score = row["usage_score"] * 2 ** (-elapsed / HALF_LIFE_SECONDS) + 1
+            self.db.execute("UPDATE items SET usage_score=?, usage_updated=? WHERE id=?", (score, max(timestamp, row["usage_updated"]), item_id))
+
+    def sort_mode(self):
+        self._require_key()
+        row = self.db.execute("SELECT value FROM settings WHERE key='sort_mode'").fetchone()
+        return row[0] if row and row[0] in ("smart", "manual") else "smart"
+
+    def set_sort_mode(self, mode):
+        self._require_key()
+        if mode not in ("smart", "manual"):
+            raise ValueError("无效的排序方式")
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO settings (key,value) VALUES ('sort_mode',?)", (mode,))
 
     def move(self, item_id: int, direction: int, visible_ids=None):
         self._require_key()

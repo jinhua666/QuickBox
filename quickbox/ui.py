@@ -3,8 +3,8 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import Qt, QTimer, QUrl, QSize
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtCore import Qt, QTimer, QUrl, QSize, QPointF
+from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPen, QColor, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
     QMenu, QMessageBox, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget)
@@ -32,6 +32,28 @@ def resize_hit_test(x, y, width, height, border=7):
     return None
 
 
+def navigation_icon(kind):
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#8592ab"), 1.4))
+    if kind == "all":
+        for x, y in ((3, 3), (11, 3), (3, 11), (11, 11)):
+            painter.drawRoundedRect(x, y, 5, 5, 1, 1)
+    elif kind == "website":
+        painter.drawEllipse(3, 3, 14, 14)
+        painter.drawEllipse(7, 3, 6, 14)
+        painter.drawLine(4, 10, 16, 10)
+    else:
+        painter.drawRoundedRect(2, 4, 16, 12, 2, 2)
+        painter.drawLine(5, 7, 8, 10)
+        painter.drawLine(8, 10, 5, 13)
+        painter.drawLine(10, 13, 14, 13)
+    painter.end()
+    return QIcon(pixmap)
+
+
 class TitleBar(QFrame):
     def __init__(self, window):
         super().__init__(window)
@@ -48,10 +70,10 @@ class TitleBar(QFrame):
         layout.addSpacing(7)
         layout.addWidget(title)
         layout.addStretch()
-        for text, tooltip, action, name in [("—", "最小化", window.showMinimized, "windowButton"),
-                                            ("□", "最大化 / 还原", self.toggle_maximize, "windowButton"),
-                                            ("×", "关闭", window.close, "closeButton")]:
-            button = QPushButton(text)
+        for symbol, tooltip, action, name in [("minimize", "最小化", window.showMinimized, "windowButton"),
+                                              ("maximize", "最大化 / 还原", self.toggle_maximize, "windowButton"),
+                                              ("close", "关闭", window.close, "closeButton")]:
+            button = WindowControl(symbol)
             button.setObjectName(name)
             button.setToolTip(tooltip)
             button.setFixedSize(42, 34)
@@ -70,6 +92,30 @@ class TitleBar(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.toggle_maximize()
         super().mouseDoubleClickEvent(event)
+
+
+class WindowControl(QPushButton):
+    def __init__(self, symbol):
+        super().__init__()
+        self.symbol = symbol
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor("#ffffff" if self.symbol == "close" and self.underMouse() else "#7c879b")
+        pen = QPen(color, 1.1)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        x, y = self.width() / 2, self.height() / 2
+        if self.symbol == "minimize":
+            painter.drawLine(QPointF(x - 4.5, y), QPointF(x + 4.5, y))
+        elif self.symbol == "maximize":
+            painter.drawRect(int(x - 4), int(y - 4), 8, 8)
+        else:
+            painter.drawLine(QPointF(x - 3.5, y - 3.5), QPointF(x + 3.5, y + 3.5))
+            painter.drawLine(QPointF(x + 3.5, y - 3.5), QPointF(x - 3.5, y + 3.5))
+        painter.end()
 
 
 class UnlockDialog(QDialog):
@@ -260,6 +306,10 @@ class MainWindow(QMainWindow):
         self.current = None
         self.copy_generation = 0
         self.copied_password = None
+        self.order_mode = store.sort_mode()
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self.refresh)
         self.setWindowTitle("QuickBox")
         self.setWindowIcon(QIcon(str(asset_path("quickbox.ico"))))
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint)
@@ -296,12 +346,17 @@ class MainWindow(QMainWindow):
         self.categories = QListWidget()
         self.categories.setObjectName("navigation")
         self.categories.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.categories.setIconSize(QSize(20, 20))
         for text, key in [("全部", "all"), ("网站", "website"), ("常用命令", "command")]:
             row = QListWidgetItem(text)
+            row.setIcon(navigation_icon(key))
             row.setData(Qt.ItemDataRole.UserRole, key)
             self.categories.addItem(row)
         nav.addWidget(self.categories, 1)
-        about = QPushButton("ⓘ   关于 QuickBox")
+        privacy = QLabel("●  数据保存在本机")
+        privacy.setObjectName("privacyLabel")
+        nav.addWidget(privacy)
+        about = QPushButton("↻   检查更新")
         about.setObjectName("aboutButton")
         about.clicked.connect(self.about)
         nav.addWidget(about)
@@ -334,9 +389,21 @@ class MainWindow(QMainWindow):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.refresh)
         main_layout.addWidget(self.search)
+        list_header = QHBoxLayout()
         self.count_label = QLabel("项目")
         self.count_label.setObjectName("sectionLabel")
-        main_layout.addWidget(self.count_label)
+        list_header.addWidget(self.count_label)
+        list_header.addStretch()
+        self.sort_button = QPushButton()
+        self.sort_button.setObjectName("sortButton")
+        self.sort_button.setToolTip("智能排序根据使用频率和近期使用情况调整顺序")
+        sort_menu = QMenu(self.sort_button)
+        sort_menu.addAction("智能排序", lambda: self.set_sort_mode("smart"))
+        sort_menu.addAction("手动排序", lambda: self.set_sort_mode("manual"))
+        self.sort_button.setMenu(sort_menu)
+        list_header.addWidget(self.sort_button)
+        main_layout.addLayout(list_header)
+        self.sort_button.setText("智能排序" if self.order_mode == "smart" else "手动排序")
 
         body = QHBoxLayout()
         body.setSpacing(18)
@@ -456,8 +523,9 @@ class MainWindow(QMainWindow):
         category = self.categories.currentItem()
         key = category.data(Qt.ItemDataRole.UserRole) if category else "all"
         self.page_title.setText({"all": "全部项目", "website": "网站", "command": "常用命令"}.get(key, "全部项目"))
+        self.page_subtitle.setText({"all": "你的信息，一目了然", "website": "常用网站和登录信息，随手可得", "command": "常用命令，快速查找与复制"}.get(key, "你的信息，一目了然"))
         old_id = self.current.id if self.current else None
-        results = self.store.list_items(kind=key if key in TYPES else None, query=self.search.text())
+        results = self.store.list_items(kind=key if key in TYPES else None, query=self.search.text(), sort=self.order_mode)
         self.count_label.setText(f"项目  /  {len(results)}")
         self.items.clear()
         for item in results:
@@ -550,7 +618,7 @@ class MainWindow(QMainWindow):
             self.refresh()
 
     def move(self, direction):
-        if self.current:
+        if self.current and self.order_mode == "manual":
             visible = [self.items.item(i).data(Qt.ItemDataRole.UserRole).id for i in range(self.items.count())]
             self.store.move(self.current.id, direction, visible)
             self.refresh()
@@ -560,6 +628,15 @@ class MainWindow(QMainWindow):
         if item and item.kind == "website" and item.url:
             if not QDesktopServices.openUrl(QUrl.fromUserInput(item.url)):
                 QMessageBox.warning(self, "打开失败", "系统无法打开此地址，请检查链接或关联应用。")
+            else:
+                self.store.record_usage(item.id)
+                self.refresh_timer.start(0)
+
+    def set_sort_mode(self, mode):
+        self.store.set_sort_mode(mode)
+        self.order_mode = mode
+        self.sort_button.setText("智能排序" if mode == "smart" else "手动排序")
+        self.refresh()
 
     def show_context_menu(self, position):
         row = self.items.itemAt(position)
@@ -577,9 +654,10 @@ class MainWindow(QMainWindow):
             menu.addAction("复制密码", lambda: self.copy_value("password"))
         if item.content:
             menu.addAction("复制命令", lambda: self.copy_value("content"))
-        menu.addSeparator()
-        menu.addAction("上移", lambda: self.move(-1))
-        menu.addAction("下移", lambda: self.move(1))
+        if self.order_mode == "manual":
+            menu.addSeparator()
+            menu.addAction("上移", lambda: self.move(-1))
+            menu.addAction("下移", lambda: self.move(1))
         menu.exec(self.items.viewport().mapToGlobal(position))
 
     def copy_value(self, field):
@@ -590,6 +668,9 @@ class MainWindow(QMainWindow):
             return
         clipboard = QApplication.clipboard()
         clipboard.setText(value)
+        if (self.current.kind == "website" and field == "url") or (self.current.kind == "command" and field == "content"):
+            self.store.record_usage(self.current.id)
+            self.refresh_timer.start(0)
         self.copy_generation += 1
         generation = self.copy_generation
         self.copied_password = value if field == "password" else None
@@ -603,9 +684,12 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已复制" + ("，30 秒后自动清除" if field == "password" else ""), 3000)
 
     def about(self):
-        QMessageBox.information(self, "关于 QuickBox", f"QuickBox {VERSION}\n本地个人信息管理工具\n\n更新检查将在配置私有仓库安全认证后提供。")
+        from .update_dialog import UpdateDialog
+        dialog = UpdateDialog(self)
+        dialog.exec()
 
     def closeEvent(self, event):
+        self.refresh_timer.stop()
         clipboard = QApplication.clipboard()
         if self.copied_password is not None and clipboard.text() == self.copied_password:
             clipboard.clear()
@@ -629,6 +713,7 @@ QLabel#pageTitle { font-size: 25px; font-weight: 700; color: #202d49; }
 QLabel#dialogTitle { font-size: 23px; font-weight: 700; color: #202d49; }
 QLabel#eyebrow, QLabel#navCaption, QLabel#sectionLabel { font-size: 11px; font-weight: 700; color: #8a96aa; }
 QLabel#muted, QLabel#hint { color: #96a1b2; font-size: 12px; }
+QLabel#privacyLabel { color: #8fa69e; font-size: 11px; padding: 5px 9px; }
 QListWidget#navigation { background: transparent; border: 0; outline: 0; padding: 0; }
 QListWidget#navigation::item { border-radius: 8px; min-height: 42px; padding-left: 15px; color: #77839a; margin: 2px 0; }
 QListWidget#navigation::item:selected { background: #edf1ff; color: #5068d8; font-weight: 700; }
@@ -639,6 +724,8 @@ QPushButton#primary { background: #586fdf; border: 1px solid #586fdf; color: whi
 QPushButton#primary:hover { background: #4960cf; }
 QPushButton#aboutButton { text-align: left; background: transparent; border: 0; color: #9ba7b8; padding: 10px; }
 QPushButton#smallButton, QPushButton#dangerButton, QPushButton#subtleButton { padding: 5px 9px; font-size: 11px; background: #f6f8fc; border: 0; }
+QPushButton#sortButton { background: #ffffff; border: 1px solid #e9edf5; border-radius: 7px; padding: 5px 12px; color: #73819b; font-size: 11px; }
+QPushButton#sortButton::menu-indicator { subcontrol-origin: padding; subcontrol-position: right center; width: 0px; }
 QPushButton#dangerButton { color: #c76a72; }
 QPushButton:disabled { color: #c7cfdb; }
 QPushButton#typeButton { padding: 8px 17px; background: #f1f4f9; border: 1px solid transparent; }

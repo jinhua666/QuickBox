@@ -55,6 +55,39 @@ def test_failed_migration_rolls_back_and_keeps_backup(tmp_path):
     assert len(list(tmp_path.glob("broken.db.backup-*"))) == 1
 
 
+def test_usage_scores_decay_and_do_not_store_history(tmp_path):
+    store = Storage(tmp_path / "data.db")
+    store.initialize("secret")
+    first = store.create(Item(kind="website", name="First"))
+    second = store.create(Item(kind="website", name="Second"))
+    day = 86400
+    store.record_usage(first.id, now=100000)
+    store.record_usage(first.id, now=100001)
+    store.record_usage(second.id, now=100000 + 42 * day)
+    assert [i.id for i in store.list_items(sort="smart", now=100000 + 42 * day)] == [second.id, first.id]
+    assert [i.id for i in store.list_items(sort="manual")] == [first.id, second.id]
+    assert store.db.execute("SELECT count(*) FROM items").fetchone()[0] == 2
+    store.close()
+
+
+def test_v2_upgrade_keeps_order_and_creates_backup(tmp_path):
+    path = tmp_path / "data.db"
+    store = Storage(path)
+    store.initialize("secret")
+    store.create(Item(kind="website", name="Site", password="secret-password"))
+    store.close()
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA user_version=2")
+        db.execute("ALTER TABLE items DROP COLUMN usage_score")
+        db.execute("ALTER TABLE items DROP COLUMN usage_updated")
+    store = Storage(path)
+    store.unlock("secret")
+    assert store.list_items()[0].password == "secret-password"
+    assert store.db.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert len(list(tmp_path.glob("data.db.backup-*"))) == 1
+    store.close()
+
+
 def test_unlock_and_password_is_not_stored_in_plaintext(tmp_path):
     path = tmp_path / "data.db"
     store = Storage(path)
