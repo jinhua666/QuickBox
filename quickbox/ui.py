@@ -4,10 +4,10 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import Qt, QTimer, QUrl, QSize, QPointF
-from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPen, QColor, QPixmap
+from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPen, QColor, QPixmap, QKeySequence, QFontDatabase
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QFrame, QGridLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTextEdit, QVBoxLayout, QWidget)
+    QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTextEdit, QPlainTextEdit, QVBoxLayout, QWidget)
 from .storage import Item, InvalidPassword
 from .version import VERSION
 
@@ -142,6 +142,37 @@ class CopyPasswordField(QLineEdit):
         if event.button() == Qt.MouseButton.LeftButton:
             self.click()
         super().mousePressEvent(event)
+
+
+class CommandView(QPlainTextEdit):
+    def __init__(self, on_copy):
+        super().__init__()
+        self.on_copy = on_copy
+        self.setReadOnly(True)
+        self.setObjectName("commandView")
+        self.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.setMinimumHeight(210)
+
+    def copy(self):
+        if self.textCursor().hasSelection():
+            super().copy()
+            self.on_copy()
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        copy = menu.addAction("复制选中内容")
+        copy.setEnabled(self.textCursor().hasSelection())
+        copy.triggered.connect(self.copy)
+        menu.addAction("全选", self.selectAll)
+        menu.exec(event.globalPos())
 
 
 class UnlockDialog(QDialog):
@@ -320,9 +351,12 @@ class ItemDialog(QDialog):
         reveal.setCheckable(True)
         reveal.toggled.connect(lambda yes: (self.password.setEchoMode(QLineEdit.EchoMode.Normal if yes else QLineEdit.EchoMode.Password), reveal.setText("隐藏" if yes else "显示")))
         password_layout.addWidget(reveal)
-        self.content = QTextEdit(item.content if item else "")
+        self.content = QPlainTextEdit(item.content if item else "")
+        self.content.setObjectName("commandEditor")
+        self.content.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.content.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.content.setPlaceholderText("输入命令内容")
-        self.content.setFixedHeight(88)
+        self.content.setMinimumHeight(190)
         self.notes = QTextEdit(item.notes if item else "")
         self.notes.setPlaceholderText("添加一点备注，选填")
         self.notes.setFixedHeight(64)
@@ -531,7 +565,7 @@ class MainWindow(QMainWindow):
         body.addWidget(self.list_stack, 1)
         detail = QFrame()
         detail.setObjectName("detailCard")
-        detail.setFixedWidth(294)
+        detail.setMinimumWidth(280)
         detail_layout = QVBoxLayout(detail)
         detail_layout.setContentsMargins(22, 22, 22, 22)
         detail_layout.setSpacing(10)
@@ -585,7 +619,7 @@ class MainWindow(QMainWindow):
         self.detail_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         detail_content_layout.addWidget(self.detail_text)
         self.detail_fields = {}
-        for key, label in [("url", "网址"), ("username", "用户名"), ("content", "命令")]:
+        for key, label in [("url", "网址"), ("username", "用户名")]:
             caption = QLabel(label + "  ·  点击复制")
             caption.setObjectName("fieldCaption")
             button = QPushButton()
@@ -596,6 +630,25 @@ class MainWindow(QMainWindow):
             detail_content_layout.addWidget(button)
             self.detail_fields[key] = button
             self.detail_fields[key + "_label"] = caption
+        self.command_container = QWidget()
+        command_layout = QVBoxLayout(self.command_container)
+        command_layout.setContentsMargins(0, 0, 0, 0)
+        command_header = QHBoxLayout()
+        command_caption = QLabel("命令内容")
+        command_caption.setObjectName("fieldCaption")
+        command_header.addWidget(command_caption)
+        command_header.addStretch()
+        self.copy_command_button = QPushButton("复制全部")
+        self.copy_command_button.setObjectName("smallButton")
+        self.copy_command_button.clicked.connect(lambda: self.copy_value("content"))
+        command_header.addWidget(self.copy_command_button)
+        command_layout.addLayout(command_header)
+        self.command_view = CommandView(self.record_command_selection)
+        command_layout.addWidget(self.command_view)
+        command_tip = QLabel("拖动选择部分内容后按 Ctrl+C 复制")
+        command_tip.setObjectName("hint")
+        command_layout.addWidget(command_tip)
+        detail_content_layout.addWidget(self.command_container)
         self.password_label = QLabel("密码")
         self.password_label.setObjectName("fieldCaption")
         detail_content_layout.addWidget(self.password_label)
@@ -619,7 +672,7 @@ class MainWindow(QMainWindow):
         self.hint.setObjectName("hint")
         self.hint.setWordWrap(True)
         detail_layout.addWidget(self.hint)
-        body.addWidget(detail)
+        body.addWidget(detail, 1)
         main_layout.addLayout(body, 1)
         columns.addWidget(main, 1)
         self.categories.currentRowChanged.connect(self.refresh)
@@ -713,12 +766,14 @@ class MainWindow(QMainWindow):
                     parts.append(f"{label}\n{value}")
         self.detail_text.setText("\n\n".join(parts) if parts else ("" if item else "从左侧列表选择一项\n即可在这里查看内容。"))
         self.detail_text.setTextFormat(Qt.TextFormat.PlainText)
-        for key in ("url", "username", "content"):
+        for key in ("url", "username"):
             value = getattr(item, key, "") if item else ""
             self.detail_fields[key].setText(value)
             self.detail_fields[key].setToolTip(value)
             self.detail_fields[key].setVisible(bool(value))
             self.detail_fields[key + "_label"].setVisible(bool(value))
+        self.command_container.setVisible(bool(item and item.kind == "command"))
+        self.command_view.setPlainText(item.content if item and item.kind == "command" else "")
         has_password = bool(item and item.password)
         self.password.setText(item.password if has_password else "")
         self.password.setVisible(has_password)
@@ -762,6 +817,10 @@ class MainWindow(QMainWindow):
             else:
                 self.store.record_usage(item.id)
                 self.refresh_timer.start(0)
+
+    def record_command_selection(self):
+        if self.current and self.current.kind == "command":
+            self.store.record_usage(self.current.id)
 
     def copy_value(self, field):
         if not self.current:
@@ -843,8 +902,9 @@ QFrame#formCard { background: #ffffff; border: 1px solid #e5eaf1; border-radius:
 QScrollArea#formScroll { background: transparent; border: 0; }
 QLabel#formTitle { color: #33445e; font-size: 13px; font-weight: 700; }
 QLabel#formHint { color: #a4afbe; font-size: 11px; }
-QLineEdit, QTextEdit { background: #fbfcfe; border: 1px solid #e2e8f0; border-radius: 8px; padding: 9px 11px; selection-background-color: #667ce4; }
-QLineEdit:focus, QTextEdit:focus { background: #ffffff; border: 1px solid #8fa9eb; }
+QLineEdit, QTextEdit, QPlainTextEdit { background: #fbfcfe; border: 1px solid #e2e8f0; border-radius: 8px; padding: 9px 11px; selection-background-color: #667ce4; }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus { background: #ffffff; border: 1px solid #8fa9eb; }
+QPlainTextEdit#commandView, QPlainTextEdit#commandEditor { font-family: 'Consolas', 'Microsoft YaHei UI'; background: #f4f6fa; color: #283b58; border: 1px solid #e1e7f0; padding: 12px; }
 QLineEdit#search { min-height: 27px; padding: 8px 12px; background: #ffffff; border: 1px solid #e5eaf2; }
 QListWidget#itemList, QListWidget#itemList QWidget { background: transparent; border: 0; outline: 0; padding: 0; }
 QListWidget#itemList::item { background: #ffffff; border: 1px solid #e9edf3; border-radius: 11px; margin-bottom: 7px; }

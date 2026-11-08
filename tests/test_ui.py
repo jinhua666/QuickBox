@@ -3,6 +3,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QPushButton
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtTest import QTest
 from quickbox.storage import Item, Storage
 from quickbox.ui import MainWindow, ItemDialog, resize_hit_test
@@ -40,8 +41,29 @@ def test_detail_click_copies_fields_and_command(tmp_path):
     assert app.clipboard().text() == "secret123"
     row = next(window.items.item(i) for i in range(window.items.count()) if window.items.item(i).data(Qt.ItemDataRole.UserRole).kind == "command")
     window.items.setCurrentItem(row)
-    window.detail_fields["content"].click()
+    window.copy_command_button.click()
     assert app.clipboard().text() == "git status"
+    window.close()
+
+
+def test_command_detail_preserves_multiline_and_copies_selection(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    store = Storage(tmp_path / "data.db")
+    store.initialize("secret")
+    content = "first command\n\nsecond command\n    indented"
+    item = store.create(Item(kind="command", name="Commands", content=content))
+    window = MainWindow(store)
+    window.items.setCurrentRow(0)
+    assert window.command_view.toPlainText() == content
+    cursor = window.command_view.textCursor()
+    cursor.setPosition(15)
+    cursor.setPosition(29, QTextCursor.MoveMode.KeepAnchor)
+    window.command_view.setTextCursor(cursor)
+    QTest.keyClick(window.command_view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    assert app.clipboard().text() == "second command"
+    assert store.db.execute("SELECT usage_score FROM items WHERE id=?", (item.id,)).fetchone()[0] > 0
+    window.copy_command_button.click()
+    assert app.clipboard().text() == content
     window.close()
 
 
