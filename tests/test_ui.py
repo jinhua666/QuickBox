@@ -55,6 +55,7 @@ def test_command_detail_preserves_multiline_and_copies_selection(tmp_path):
     window = MainWindow(store)
     window.items.setCurrentRow(0)
     assert window.command_view.toPlainText() == content
+    assert window.command_view.minimumHeight() >= 350
     cursor = window.command_view.textCursor()
     cursor.setPosition(15)
     cursor.setPosition(29, QTextCursor.MoveMode.KeepAnchor)

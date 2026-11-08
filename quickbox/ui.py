@@ -152,7 +152,7 @@ class CommandView(QPlainTextEdit):
         self.setObjectName("commandView")
         self.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.setMinimumHeight(210)
+        self.setMinimumHeight(360)
 
     def copy(self):
         if self.textCursor().hasSelection():
