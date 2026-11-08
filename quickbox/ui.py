@@ -644,11 +644,11 @@ class MainWindow(QMainWindow):
         command_header.addWidget(self.copy_command_button)
         command_layout.addLayout(command_header)
         self.command_view = CommandView(self.record_command_selection)
-        command_layout.addWidget(self.command_view)
+        command_layout.addWidget(self.command_view, 1)
         command_tip = QLabel("拖动选择部分内容后按 Ctrl+C 复制")
         command_tip.setObjectName("hint")
         command_layout.addWidget(command_tip)
-        detail_content_layout.addWidget(self.command_container)
+        detail_content_layout.addWidget(self.command_container, 1)
         self.password_label = QLabel("密码")
         self.password_label.setObjectName("fieldCaption")
         detail_content_layout.addWidget(self.password_label)
@@ -765,6 +765,7 @@ class MainWindow(QMainWindow):
                 if value:
                     parts.append(f"{label}\n{value}")
         self.detail_text.setText("\n\n".join(parts) if parts else ("" if item else "从左侧列表选择一项\n即可在这里查看内容。"))
+        self.detail_text.setVisible(bool(parts) or not item)
         self.detail_text.setTextFormat(Qt.TextFormat.PlainText)
         for key in ("url", "username"):
             value = getattr(item, key, "") if item else ""
